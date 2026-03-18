@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DAT One</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      background: #202124;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      -webkit-app-region: no-drag;
+    }
+
+    /* ── TAB BAR ── */
+    #tab-bar {
+      display: flex;
+      align-items: flex-end;
+      background: #35363a;
+      height: 42px;
+      padding: 6px 4px 0 8px;
+      gap: 1px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-shrink: 0;
+      scrollbar-width: none;
+      -webkit-app-region: drag;
+    }
+    #tab-bar::-webkit-scrollbar { display: none; }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      min-width: 120px;
+      max-width: 240px;
+      height: 36px;
+      background: #2a2b2e;
+      border-radius: 8px 8px 0 0;
+      padding: 0 8px 0 12px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #bbb;
+      gap: 8px;
+      flex-shrink: 0;
+      user-select: none;
+      transition: background 0.15s, color 0.15s;
+      -webkit-app-region: no-drag;
+      position: relative;
+    }
+    .tab::before {
+      content: '';
+      position: absolute;
+      left: -4px;
+      bottom: 0;
+      width: 8px;
+      height: 8px;
+      background: transparent;
+      border-bottom-right-radius: 4px;
+      box-shadow: 2px 2px 0 2px #2a2b2e;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .tab::after {
+      content: '';
+      position: absolute;
+      right: -4px;
+      bottom: 0;
+      width: 8px;
+      height: 8px;
+      background: transparent;
+      border-bottom-left-radius: 4px;
+      box-shadow: -2px 2px 0 2px #2a2b2e;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .tab:hover {
+      background: #3c3d41;
+      color: #e8e8e8;
+    }
+    .tab.active {
+      background: #202124;
+      color: #ffffff;
+      z-index: 2;
+    }
+    .tab.active::before,
+    .tab.active::after {
+      box-shadow: 2px 2px 0 2px #202124;
+      opacity: 1;
+    }
+    .tab.active::after {
+      box-shadow: -2px 2px 0 2px #202124;
+    }
+
+    .tab-favicon {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      object-fit: contain;
+    }
+    .tab-favicon-placeholder {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      background: #555;
+      border-radius: 2px;
+    }
+
+    .tab-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+
+    .tab-close {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      color: #999;
+      flex-shrink: 0;
+      line-height: 1;
+      transition: background 0.1s, color 0.1s;
+    }
+    .tab-close:hover {
+      background: #555;
+      color: #fff;
+    }
+
+    /* ── ADD TAB BUTTON ── */
+    #add-tab-btn {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      font-size: 20px;
+      font-weight: 300;
+      color: #aaa;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin: 0 4px 4px 6px;
+      line-height: 1;
+      transition: background 0.15s, color 0.15s;
+      -webkit-app-region: no-drag;
+    }
+    #add-tab-btn:hover {
+      background: #4a4b4f;
+      color: #fff;
+    }
+
+    /* ── WEBVIEW CONTAINER ── */
+    #webview-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    webview {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+    webview.active {
+      display: flex;
+    }
+
+    /* ── LOADING SPINNER ── */
+    .tab-loading::after {
+      content: '';
+      position: absolute;
+      right: 26px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 10px;
+      height: 10px;
+      border: 2px solid #555;
+      border-top-color: #aaa;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+    @keyframes spin { to { transform: translateY(-50%) rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="tab-bar">
+    <button id="add-tab-btn" title="New tab">+</button>
+  </div>
+  <div id="webview-container"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron')
+
+    const tabBar   = document.getElementById('tab-bar')
+    const addBtn   = document.getElementById('add-tab-btn')
+    const container = document.getElementById('webview-container')
+
+    let tabs       = []
+    let activeTabId = null
+    let tabCounter = 0
+    let initialUrl  = ''
+    let partitionName = ''
+    let injectCSS   = ''
+
+    /* ── RECEIVE CONFIG FROM MAIN ── */
+    ipcRenderer.on('tab-shell-init', (event, config) => {
+      initialUrl    = config.url
+      partitionName = config.partition
+      injectCSS     = config.css || ''
+      createTab(initialUrl)
+    })
+
+    /* ── CREATE A NEW TAB ── */
+    function createTab(url) {
+      const id = ++tabCounter
+
+      /* -- Tab DOM element -- */
+      const tab = document.createElement('div')
+      tab.className = 'tab tab-loading'
+      tab.dataset.id = id
+      tab.innerHTML = `
+        <div class="tab-favicon-placeholder"></div>
+        <span class="tab-title">Loading…</span>
+        <span class="tab-close" title="Close tab">×</span>
+      `
+
+      tab.addEventListener('click', (e) => {
+        if (e.target.classList.contains('tab-close')) return
+        switchTab(id)
+      })
+      tab.querySelector('.tab-close').addEventListener('click', (e) => {
+        e.stopPropagation()
+        closeTab(id)
+      })
+
+      tabBar.insertBefore(tab, addBtn)
+
+      /* -- Webview element -- */
+      const wv = document.createElement('webview')
+      wv.dataset.id = id
+      wv.setAttribute('partition', partitionName)
+      wv.setAttribute('useragent',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36')
+      wv.setAttribute('allowpopups', 'true')
+      wv.src = url
+
+      /* Update tab title & favicon */
+      wv.addEventListener('page-title-updated', (e) => {
+        tab.querySelector('.tab-title').textContent = e.title || 'DAT One'
+        tab.querySelector('.tab-title').title       = e.title || 'DAT One'
+      })
+
+      wv.addEventListener('page-favicon-updated', (e) => {
+        if (e.favicons && e.favicons.length > 0) {
+          const placeholder = tab.querySelector('.tab-favicon-placeholder')
+          if (placeholder) {
+            const img = document.createElement('img')
+            img.className = 'tab-favicon'
+            img.src = e.favicons[0]
+            img.onerror = () => img.remove()
+            placeholder.replaceWith(img)
+          }
+        }
+      })
+
+      /* Inject CSS + button script when loaded */
+      wv.addEventListener('dom-ready', () => {
+        tab.classList.remove('tab-loading')
+        if (injectCSS) {
+          wv.insertCSS(injectCSS).catch(() => {})
+        }
+        wv.executeJavaScript(buildInjectScript()).catch(() => {})
+      })
+
+      wv.addEventListener('did-finish-load', () => {
+        if (injectCSS) {
+          wv.insertCSS(injectCSS).catch(() => {})
+        }
+        wv.executeJavaScript(buildInjectScript()).catch(() => {})
+      })
+
+      wv.addEventListener('did-navigate-in-page', () => {
+        if (injectCSS) {
+          wv.insertCSS(injectCSS).catch(() => {})
+        }
+        wv.executeJavaScript(buildInjectScript()).catch(() => {})
+      })
+
+      /* Open links that call window.open as new tabs here */
+      wv.addEventListener('new-window', (e) => {
+        e.preventDefault()
+        createTab(e.url)
+      })
+
+      container.appendChild(wv)
+
+      tabs.push({ id, tab, wv })
+      switchTab(id)
+
+      return id
+    }
+
+    /* ── SWITCH TO TAB ── */
+    function switchTab(id) {
+      activeTabId = id
+      tabs.forEach(({ tab, wv }) => {
+        const active = String(wv.dataset.id) === String(id)
+        tab.classList.toggle('active', active)
+        wv.classList.toggle('active', active)
+      })
+      scrollTabIntoView(id)
+    }
+
+    function scrollTabIntoView(id) {
+      const t = tabs.find(t => t.id === id)
+      if (t) t.tab.scrollIntoView({ behavior: 'smooth', inline: 'nearest' })
+    }
+
+    /* ── CLOSE A TAB ── */
+    function closeTab(id) {
+      if (tabs.length === 1) {
+        ipcRenderer.send('close-tab-shell')
+        return
+      }
+      const idx = tabs.findIndex(t => t.id === id)
+      if (idx === -1) return
+      const { tab, wv } = tabs[idx]
+      tab.remove()
+      wv.remove()
+      tabs.splice(idx, 1)
+
+      if (activeTabId === id) {
+        const next = tabs[Math.min(idx, tabs.length - 1)]
+        switchTab(next.id)
+      }
+    }
+
+    /* ── + BUTTON ── */
+    addBtn.addEventListener('click', () => {
+      createTab(initialUrl)
+    })
+
+    /* ── SCRIPT INJECTED INTO EVERY WEBVIEW ──
+       FIX BUG 3: buildInjectScript was commented out but still called,
+       causing ReferenceError on every webview load. Restored with a
+       safe no-op stub that can be extended as needed.
+    */
+    function buildInjectScript() {
+      return `
+        (function() {
+          if (window.__datTabShellInjected) return;
+          window.__datTabShellInjected = true;
+          // Placeholder for any future per-page injection logic
+        })();
+      `;
+    }
+
+
+
+
+  </script>
+</body>
+</html>
+```

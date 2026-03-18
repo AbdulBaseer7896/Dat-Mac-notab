@@ -1,0 +1,345 @@
+<!-- <!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: #f1f3f4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+    #tab-bar {
+      display: flex;
+      align-items: center;
+      background: #dee1e6;
+      height: 40px;
+      padding: 6px 8px 0;
+      gap: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-shrink: 0;
+      scrollbar-width: none;
+    }
+    #tab-bar::-webkit-scrollbar { display: none; }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      min-width: 100px;
+      max-width: 220px;
+      height: 34px;
+      background: #e8eaed;
+      border-radius: 8px 8px 0 0;
+      padding: 0 10px;
+      cursor: pointer;
+      font-size: 12px;
+      color: #444;
+      gap: 6px;
+      position: relative;
+      flex-shrink: 0;
+      user-select: none;
+      transition: background 0.15s;
+    }
+    .tab:hover { background: #f1f3f4; }
+    .tab.active {
+      background: #ffffff;
+      color: #000;
+      z-index: 1;
+    }
+    .tab-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tab-close {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: #666;
+      flex-shrink: 0;
+      line-height: 1;
+    }
+    .tab-close:hover { background: #ccc; color: #000; }
+
+    #add-tab-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      font-size: 20px;
+      color: #555;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-left: 4px;
+      line-height: 1;
+    }
+    #add-tab-btn:hover { background: #c5c8cd; }
+
+    #webview-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    webview {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+    }
+    webview.active { display: flex; }
+  </style>
+</head>
+<body>
+  <div id="tab-bar">
+    <button id="add-tab-btn" title="New tab">+</button>
+  </div>
+  <div id="webview-container"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron')
+
+    const tabBar = document.getElementById('tab-bar')
+    const addBtn = document.getElementById('add-tab-btn')
+    const container = document.getElementById('webview-container')
+
+    let tabs = []
+    let activeTabId = null
+    let tabCounter = 0
+    let initialUrl = ''
+    let partitionName = ''
+
+    // Receive config from main process
+    ipcRenderer.on('tab-shell-init', (event, config) => {
+      initialUrl = config.url
+      partitionName = config.partition
+      createTab(initialUrl)
+    })
+
+    function createTab(url) {
+      const id = ++tabCounter
+
+      // Create tab element
+      const tab = document.createElement('div')
+      tab.className = 'tab'
+      tab.dataset.id = id
+      tab.innerHTML = `
+        <span class="tab-title">Loading...</span>
+        <span class="tab-close" data-id="${id}">×</span>
+      `
+      tab.addEventListener('click', (e) => {
+        if (e.target.classList.contains('tab-close')) return
+        switchTab(id)
+      })
+      tab.querySelector('.tab-close').addEventListener('click', (e) => {
+        e.stopPropagation()
+        closeTab(id)
+      })
+
+      // Insert before the + button
+      tabBar.insertBefore(tab, addBtn)
+
+      // Create webview
+      const wv = document.createElement('webview')
+      wv.dataset.id = id
+      wv.setAttribute('partition', partitionName)
+      wv.setAttribute('useragent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36')
+      wv.setAttribute('allowpopups', 'true')
+      wv.src = url
+
+      wv.addEventListener('page-title-updated', (e) => {
+        const t = tab.querySelector('.tab-title')
+        if (t) t.textContent = e.title || 'New Tab'
+        if (t) t.title = e.title || 'New Tab'
+      })
+
+      wv.addEventListener('did-finish-load', () => {
+        // Inject CSS into the webview
+        ipcRenderer.send('inject-css-into-webview', { tabId: id })
+        wv.executeJavaScript(getInjectScript()).catch(() => {})
+      })
+
+      wv.addEventListener('dom-ready', () => {
+        wv.executeJavaScript(getInjectScript()).catch(() => {})
+      })
+
+      // Handle new-window from webview (when DAT opens links)
+      wv.addEventListener('new-window', (e) => {
+        createTab(e.url)
+      })
+
+      container.appendChild(wv)
+
+      tabs.push({ id, tab, wv })
+      switchTab(id)
+    }
+
+    function switchTab(id) {
+      activeTabId = id
+      tabs.forEach(({ tab, wv }) => {
+        const isActive = wv.dataset.id == id
+        tab.classList.toggle('active', isActive)
+        wv.classList.toggle('active', isActive)
+      })
+    }
+
+    function closeTab(id) {
+      if (tabs.length === 1) {
+        ipcRenderer.send('close-tab-shell')
+        return
+      }
+      const idx = tabs.findIndex(t => t.id === id)
+      const { tab, wv } = tabs[idx]
+      tab.remove()
+      wv.remove()
+      tabs.splice(idx, 1)
+
+      if (activeTabId === id) {
+        const newTab = tabs[Math.min(idx, tabs.length - 1)]
+        switchTab(newTab.id)
+      }
+    }
+
+    addBtn.addEventListener('click', () => {
+      createTab(initialUrl)
+    })
+
+    function getInjectScript() {
+      return `
+        (function() {
+          if (window.__datTabInjected) return;
+          window.__datTabInjected = true;
+
+          function injectAddButton() {
+            const tabGroup = document.querySelector('mat-tab-group.tab-group');
+            if (!tabGroup) return;
+            const tabLabels = tabGroup.querySelector('.mat-tab-labels');
+            if (!tabLabels) return;
+            if (tabLabels.querySelector('#dat-injected-add-btn')) return;
+
+            const btn = document.createElement('button');
+            btn.id = 'dat-injected-add-btn';
+            btn.title = 'Open new tab';
+            btn.innerHTML = '+';
+            btn.style.cssText = 'display:inline-flex !important;align-items:center !important;justify-content:center !important;width:32px !important;height:32px !important;min-width:32px !important;border:none !important;background:transparent !important;color:#555 !important;font-size:20px !important;cursor:pointer !important;border-radius:50% !important;margin:auto 4px !important;padding:0 !important;';
+
+            btn.addEventListener('mouseenter', () => btn.style.setProperty('background','#e0e0e0','important'));
+            btn.addEventListener('mouseleave', () => btn.style.setProperty('background','transparent','important'));
+            btn.addEventListener('click', () => window.open(window.location.href, '_blank'));
+
+            tabLabels.appendChild(btn);
+          }
+
+          setInterval(injectAddButton, 500);
+          const obs = new MutationObserver(injectAddButton);
+          obs.observe(document.body, { childList: true, subtree: true });
+        })();
+      `
+    }
+  </script>
+</body>
+</html> -->
+
+
+
+
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { display: flex; flex-direction: column; height: 100vh; background: #2d2d2d; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    #tab-bar { display: flex; align-items: center; background: #1e1e1e; color: white; padding: 4px 4px 0 4px; overflow-x: auto; white-space: nowrap; }
+    .tab { display: inline-flex; align-items: center; background: #3c3c3c; color: #ccc; border-radius: 4px 4px 0 0; padding: 6px 12px; margin-right: 2px; cursor: default; user-select: none; font-size: 12px; max-width: 200px; }
+    .tab.active { background: #2d2d2d; color: white; }
+    .tab button { background: none; border: none; color: inherit; margin-left: 8px; cursor: pointer; font-size: 14px; opacity: 0.6; }
+    .tab button:hover { opacity: 1; }
+    #new-tab { background: #3c3c3c; color: white; border: none; border-radius: 4px; width: 24px; height: 24px; font-size: 16px; line-height: 1; cursor: pointer; margin-left: 4px; }
+    #webview-container { flex: 1; background: white; }
+    webview { display: inline-flex; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="tab-bar">
+    <div class="tab active" data-id="0">DAT</div>
+    <button id="new-tab">+</button>
+  </div>
+  <div id="webview-container">
+    <webview id="webview-0" partition="persist:default" src="about:blank" allowpopups></webview>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron')
+    let tabs = []
+    let activeTabId = 0
+    let nextId = 1
+
+    ipcRenderer.on('tab-shell-init', (event, { url, partition }) => {
+      // Create the first tab with the given partition
+      tabs.push({ id: 0, webview: document.getElementById('webview-0'), url, partition })
+      document.querySelector('.tab[data-id="0"]').textContent = new URL(url).hostname
+      tabs[0].webview.src = url
+      tabs[0].webview.partition = partition
+    })
+
+    function createTab(url = 'https://one.dat.com') {
+      const id = nextId++
+      const webview = document.createElement('webview')
+      webview.id = `webview-${id}`
+      webview.setAttribute('allowpopups', '')
+      webview.style.display = 'none'
+      document.getElementById('webview-container').appendChild(webview)
+
+      const tab = document.createElement('div')
+      tab.className = 'tab'
+      tab.dataset.id = id
+      tab.innerHTML = `New Tab <button onclick="closeTab(${id})">×</button>`
+      document.getElementById('tab-bar').insertBefore(tab, document.getElementById('new-tab'))
+
+      tabs.push({ id, webview, url, partition: activeTab ? activeTab.partition : 'persist:default' })
+      webview.partition = activeTab ? activeTab.partition : 'persist:default'
+      webview.src = url
+
+      // Switch to new tab
+      setActiveTab(id)
+    }
+
+    window.createTab = createTab
+
+    function setActiveTab(id) {
+      tabs.forEach(t => {
+        const active = t.id === id
+        t.webview.style.display = active ? 'inline-flex' : 'none'
+        document.querySelector(`.tab[data-id="${t.id}"]`).classList.toggle('active', active)
+      })
+      activeTabId = id
+    }
+
+    function closeTab(id) {
+      const index = tabs.findIndex(t => t.id === id)
+      if (index === -1) return
+      const tab = tabs[index]
+      tab.webview.remove()
+      document.querySelector(`.tab[data-id="${id}"]`).remove()
+      tabs.splice(index, 1)
+      if (tabs.length === 0) {
+        ipcRenderer.send('close-tab-shell')
+      } else {
+        setActiveTab(tabs[Math.min(index, tabs.length - 1)].id)
+      }
+    }
+
+    document.getElementById('new-tab').addEventListener('click', () => createTab())
+  </script>
+</body>
+</html>

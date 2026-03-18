@@ -38,12 +38,8 @@ mac:
   gatekeeperAssess: false
   notarize: false
   target:
-    - target: dmg
-      arch:
-        - current
-    - target: zip
-      arch:
-        - current
+    - dmg
+    - zip
 dmg:
   artifactName: ${name}-${version}.${ext}
 linux:

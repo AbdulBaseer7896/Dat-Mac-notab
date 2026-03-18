@@ -10,6 +10,12 @@ files:
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!**/node_modules/@esbuild/**'
+  - '!**/node_modules/esbuild/**'
+  - '!**/node_modules/vite/**'
+  - '!**/node_modules/electron-vite/**'
+  - '!**/node_modules/rollup/**'
+  - '!**/node_modules/@rollup/**'
 win:
   icon: resources/icon.ico
   target:
@@ -28,30 +34,25 @@ nsis:
 mac:
   icon: resources/icon.png
   category: public.app-category.productivity
-  hardenedRuntime: true
+  hardenedRuntime: false
   gatekeeperAssess: false
-  entitlementsInherit: build/entitlements.mac.plist
   notarize: false
   target:
     - target: dmg
       arch:
-        - x64
-        - arm64
+        - current
     - target: zip
       arch:
-        - x64
-        - arm64
+        - current
 dmg:
-  artifactName: ${name}-${version}-${arch}.${ext}
+  artifactName: ${name}-${version}.${ext}
 linux:
   target:
     - AppImage
     - deb
   maintainer: datone.org
   category: Utility
-appImage:
-  artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
   provider: generic
-  url: http://134.209.43.91:3000/file/update
+  url: http://164.90.134.242:3000/file/update

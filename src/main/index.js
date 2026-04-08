@@ -8,12 +8,18 @@ import FormData from 'form-data'
 import AdmZip from 'adm-zip'
 import fs from 'fs'
 import tmp from 'tmp'
+import log from 'electron-log'
+
+log.transports.file.level = 'info'
+autoUpdater.logger = log
+autoUpdater.autoDownload = false
+autoUpdater.autoInstallOnAppQuit = true
 
 // ─────────────────────────────────────────────────────────────
 // BACKEND URL — hardcoded. dotenv does NOT work in packaged
 // Electron apps (.env is never bundled into the .asar).
 // ─────────────────────────────────────────────────────────────
-const BACKEND = 'http://164.90.134.242:3000'
+const BACKEND = 'https://dat-one-backend.vercel.app'
 
 // ─────────────────────────────────────────────────────────────
 // SESSION CHECK SETTINGS
@@ -33,12 +39,16 @@ const loginHandlers = new Map()
 
 app.on('login', (event, webContents, request, authInfo, callback) => {
   const { host } = authInfo
+  // console.log(`[AUTH] Proxy login request for host: ${host}`)
   if (loginHandlers.has(host)) {
     const { username, password } = loginHandlers.get(host)
+    // console.log(`[AUTH] Providing credentials for ${host}`)
     callback(username, password)
-    loginHandlers.delete(host)
+    // CRITICAL: We do NOT delete the handler here. 
+    // Proxies often require authentication multiple times as different resources load.
     event.preventDefault()
   } else {
+    // console.log(`[AUTH] No credentials found for ${host}`)
     event.preventDefault()
   }
 })
@@ -46,7 +56,30 @@ app.on('login', (event, webContents, request, authInfo, callback) => {
 async function uploadZipFile(datSessionId, folderPath) {
   const tempZipFile = tmp.fileSync({ postfix: '.zip' })
   const zip = new AdmZip()
-  zip.addLocalFolder(folderPath)
+
+  function addFolderSafe(currentPath, zipPath = '') {
+    if (!fs.existsSync(currentPath)) return;
+    try {
+      const items = fs.readdirSync(currentPath);
+      for (const item of items) {
+        const fullPath = path.join(currentPath, item);
+        try {
+          if (fs.statSync(fullPath).isDirectory()) {
+            addFolderSafe(fullPath, zipPath ? `${zipPath}/${item}` : item);
+          } else {
+            zip.addLocalFile(fullPath, zipPath);
+          }
+        } catch (err) {
+          console.log(`Skipping locked file/folder: ${fullPath}`);
+        }
+      }
+    } catch (err) {
+      console.log(`Skipping folder: ${currentPath} - ${err.message}`);
+    }
+  }
+
+  addFolderSafe(folderPath);
+
   zip.writeZip(tempZipFile.name)
   const form = new FormData()
   form.append('file', fs.createReadStream(tempZipFile.name))
@@ -110,7 +143,10 @@ function userDataChanged(stored, fresh) {
   if (!stored || !fresh) return true
   const relevantKeys = ['id', 'role', 'isBanned', 'token']
   for (const key of relevantKeys) {
-    if (String(stored[key]) !== String(fresh[key])) return true
+    if (String(stored[key]) !== String(fresh[key])) {
+      console.log(`[MISMATCH] key: ${key}, stored: ${stored[key]}, fresh: ${fresh[key]}`)
+      return true
+    }
   }
   const sp = stored.permission || {}
   const fp = fresh.permission || {}
@@ -122,7 +158,10 @@ function userDataChanged(stored, fresh) {
     'searchLoadsViewDirectory', 'dataSessionId', 'domain'
   ]
   for (const key of permKeys) {
-    if (String(sp[key]) !== String(fp[key])) return true
+    if (String(sp[key]) !== String(fp[key])) {
+      console.log(`[MISMATCH] permission key: ${key}, stored: ${sp[key]}, fresh: ${fp[key]}`)
+      return true
+    }
   }
   return false
 }
@@ -131,19 +170,35 @@ function userDataChanged(stored, fresh) {
 // PROXY WINDOW (admin session upload)
 // ─────────────────────────────────────────────────────────────
 async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
-  const [host, port, username, password] = proxyUrl.split(':')
+  // Sanitize proxy string: remove http:// or https:// if user pasted them
+  let proxyStr = (proxyUrl || '').trim()
+  proxyStr = proxyStr.replace(/^https?:\/\//, '')
+
+  const [host, port, username, password] = proxyStr.split(':')
   const newSession = session.fromPartition(partitionName)
+
   try {
-    await newSession.setProxy({ proxyRules: `http://${host}:${port}` })
+    if (host && port) {
+      console.log(`[PROXY] Setting proxy rules: http://${host}:${port}`)
+      await newSession.setProxy({ proxyRules: `http://${host}:${port}` })
+    } else {
+      console.log(`[PROXY] No valid host/port found, clearing proxy rules.`)
+      await newSession.setProxy({ proxyRules: '' })
+    }
   } catch (error) {
-    console.error('Error setting proxy:', error)
+    console.error('[PROXY] Error setting proxy:', error)
   }
-  loginHandlers.set(host, { username, password })
+
+  if (host) {
+    loginHandlers.set(host, { username, password })
+    // If the host is an IP, also set it without port just in case authInfo omits it
+    if (host.includes(':')) loginHandlers.set(host.split(':')[0], { username, password })
+  }
 
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
   proxyWindow = new BrowserWindow({
     width, height,
-    show: false,
+    show: true,
     autoHideMenuBar: true,
     webPreferences: {
       webgl: false,
@@ -156,11 +211,23 @@ async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
     }
   })
 
+  // proxyWindow.webContents.setUserAgent(
+  //   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+  // )
   proxyWindow.webContents.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   )
+
   proxyWindow.on('ready-to-show', () => proxyWindow.show())
+
+  proxyWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[LOAD ERROR] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`)
+  })
+
   proxyWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+
+  // Try loading a simple page first if DAT is blank, or just stick to DAT
+  console.log(`[NAVIGATE] Loading URL: https://one.dat.com`)
   proxyWindow.loadURL('https://one.dat.com')
 
   proxyWindow.webContents.on('devtools-opened', () => proxyWindow.webContents.closeDevTools())
@@ -214,14 +281,28 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
     await downloadAndUnzipFile(fileName, destinationPath)
   }
 
-  const [host, port, username, password] = proxyUrl.split(':')
+  let proxyStr = (proxyUrl || '').trim()
+  proxyStr = proxyStr.replace(/^https?:\/\//, '')
+  const [host, port, username, password] = proxyStr.split(':')
+
   const newSession = session.fromPartition(partitionName)
   try {
-    await newSession.setProxy({ proxyRules: `http://${host}:${port}` })
+    if (host && port) {
+      console.log(`[USER PROXY] Setting proxy rules: http://${host}:${port}`)
+      await newSession.setProxy({ proxyRules: `http://${host}:${port}` })
+    } else {
+      console.log(`[USER PROXY] No valid host/port found, clearing proxy rules.`)
+      await newSession.setProxy({ proxyRules: '' })
+    }
   } catch (error) {
-    console.error('Error setting proxy:', error)
+    console.error('[USER PROXY] Error setting proxy:', error)
   }
-  loginHandlers.set(host, { username, password })
+
+  if (host) {
+    loginHandlers.set(host, { username, password })
+    // If the host is an IP, also set it without port just in case authInfo omits it
+    if (host.includes(':')) loginHandlers.set(host.split(':')[0], { username, password })
+  }
 
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
 
@@ -229,7 +310,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
   // are not loading a local HTML file that uses require('electron')
   userWindow = new BrowserWindow({
     width, height,
-    show: false,
+    show: true,
     autoHideMenuBar: true,
     webPreferences: {
       webgl: false,
@@ -238,7 +319,9 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       enableRemoteModule: false,
       preload: join(__dirname, '../preload/index.js'),
       partition: partitionName,
-      sandbox: false
+      sandbox: false,
+      // Explicitly allow WebAuthn (Passkeys) for modern site compatibility
+      webauthn: true
     }
   })
 
@@ -252,15 +335,18 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
     ) event.preventDefault()
   })
 
-  userWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    console.log('Failed to load:', errorDescription)
+  userWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.log(`[USER LOAD ERROR] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`)
     if (errorDescription.includes('ERR_PROXY_CONNECTION_FAILED')) {
       console.log('Proxy connection failed!')
+    }
+    if (errorCode === -10 || errorDescription.includes('ERR_TOO_MANY_RETRIES')) {
+      console.log('Infinite redirect loop detected! This usually means your DAT session is expired or the proxy is blocking the authentication.')
     }
   })
 
   userWindow.webContents.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   )
 
   userWindow.on('ready-to-show', () => {
@@ -484,7 +570,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
 
       if (userDataChanged(user, response.data)) {
         console.log('User data changed — logging out.')
-        forceLogout()
+        forceLogout('User data mismatch (Role/Permission/Ban status change)')
       }
     } catch (error) {
       consecutiveFailures++
@@ -493,17 +579,36 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       const is401 = error.response && error.response.status === 401
       if (is401) {
         console.log('Server returned 401 — logging out immediately.')
-        forceLogout()
+        forceLogout('Server returned 401 (Unauthorized/Session Expired)')
       } else if (consecutiveFailures >= FAILURES_BEFORE_LOGOUT) {
         console.log(`${FAILURES_BEFORE_LOGOUT} consecutive failures — logging out.`)
-        forceLogout()
+        forceLogout(`Network connectivity issues (${FAILURES_BEFORE_LOGOUT} consecutive failures)`)
       }
       // else: transient error, stay logged in and retry next interval
     }
   }, SESSION_CHECK_INTERVAL_MS)
 
-  function forceLogout() {
+  async function forceLogout(reason = 'Unknown') {
     clearInterval(intervalId)
+    const user = store.get('user')
+    if (user && user.token) {
+      try {
+        await axios.post(`${BACKEND}/activity-log`, {
+          category: 'AUTH',
+          actionType: 'FORCEFUL_LOGOUT',
+          actionLabel: 'Forceful Logout Detected',
+          resourceType: 'SESSION',
+          resourceLabel: `Session for ${user.email}`,
+          details: reason,
+          source: 'Electron Client'
+        }, {
+          headers: { Authorization: user.token },
+          timeout: 5000
+        })
+      } catch (e) {
+        console.error('Failed to send forceful logout log to server:', e.message)
+      }
+    }
     store.set('user', null)
     if (userWindow && !userWindow.isDestroyed()) userWindow.close()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('check-session', null)
@@ -516,7 +621,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
   userWindow.on('closed', async () => {
     // Close any popup windows that were opened from this session
     newWindows.forEach((win) => {
-      try { if (!win.isDestroyed()) win.close() } catch (e) {}
+      try { if (!win.isDestroyed()) win.close() } catch (e) { }
     })
     newWindows.length = 0
     userWindow = null
@@ -564,12 +669,9 @@ function createWindow() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AUTO UPDATER
+// AUTO UPDATER INITIALIZATION
 // ─────────────────────────────────────────────────────────────
-autoUpdater.setFeedURL({
-  provider: 'generic',
-  url: `${BACKEND}/file/update`
-})
+// Feed URL is now handled by electron-builder.yml (github provider)
 
 // ─────────────────────────────────────────────────────────────
 // APP READY
@@ -586,7 +688,14 @@ app.whenReady().then(async () => {
 
   // createWindow FIRST — autoUpdater needs mainWindow to exist
   createWindow()
-  autoUpdater.checkForUpdates()
+  
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdates()
+    // Re-check every 4 hours
+    setInterval(() => {
+      autoUpdater.checkForUpdates()
+    }, 4 * 60 * 60 * 1000)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -607,51 +716,45 @@ app.whenReady().then(async () => {
 })
 
 // ─────────────────────────────────────────────────────────────
-// AUTO UPDATER EVENTS — guard mainWindow && store before use
+// AUTO UPDATER EVENTS
 // ─────────────────────────────────────────────────────────────
-autoUpdater.on('update-available', () => {
-  try {
-    const data = { available: true, message: 'A new version is available.' }
-    if (store) store.set('update-msg', data)
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-msg', data)
-    autoUpdater.downloadUpdate()
-  } catch (e) { console.log(e) }
+autoUpdater.on('checking-for-update', () => {
+  log.info('Checking for update...')
 })
 
-autoUpdater.on('update-not-available', () => {
-  try {
-    const data = { available: false, message: 'No updates available.' }
-    if (store) store.set('update-msg', data)
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-msg', data)
-  } catch (e) { console.log(e) }
+autoUpdater.on('update-available', (info) => {
+  log.info(`Update available: ${info.version}`)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-available', { version: info.version })
+  }
+})
+
+autoUpdater.on('update-not-available', (info) => {
+  log.info(`Update not available: ${info?.version}`)
 })
 
 autoUpdater.on('download-progress', (progressObj) => {
-  try {
-    const data = { available: true, message: `Downloading... (${Math.round(progressObj.percent)}%)` }
-    if (store) store.set('update-msg', data)
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-msg', data)
-  } catch (e) { console.log(e) }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-progress', {
+      percent: progressObj.percent,
+      transferred: progressObj.transferred,
+      total: progressObj.total
+    })
+  }
 })
 
-autoUpdater.on('update-downloaded', () => {
-  try {
-    const data = { available: true, downloaded: true, message: 'New version downloaded, Restarting...' }
-    if (store) store.set('update-msg', data)
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-msg', data)
-    setTimeout(() => {
-      if (store) store.set('update-msg', null)
-      autoUpdater.quitAndInstall()
-    }, 5000)
-  } catch (e) { console.log(e) }
+autoUpdater.on('update-downloaded', (info) => {
+  log.info(`Update downloaded: ${info.version}`)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-downloaded', { version: info.version })
+  }
 })
 
-autoUpdater.on('error', (error) => {
-  try {
-    const data = { available: false, error: error.message }
-    if (store) store.set('update-msg', data)
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-msg', data)
-  } catch (e) { console.log(e) }
+autoUpdater.on('error', (err) => {
+  log.error('Error in auto-updater: ', err)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-error', err.message)
+  }
 })
 
 app.on('window-all-closed', () => {
@@ -661,6 +764,14 @@ app.on('window-all-closed', () => {
 // ─────────────────────────────────────────────────────────────
 // IPC HANDLERS
 // ─────────────────────────────────────────────────────────────
+ipcMain.handle('start-update', () => {
+  autoUpdater.downloadUpdate()
+})
+
+ipcMain.handle('restart-and-install', () => {
+  autoUpdater.quitAndInstall()
+})
+
 ipcMain.handle('login', async (event, arg) => {
   try {
     const response = await axios.request({

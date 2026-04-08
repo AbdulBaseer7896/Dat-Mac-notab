@@ -50,5 +50,6 @@ linux:
   category: Utility
 npmRebuild: false
 publish:
-  provider: generic
-  url: http://164.90.134.242:3000/file/update
+  provider: github
+  owner: AbdulBaseer7896
+  repo: Dat-Mac-notab

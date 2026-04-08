@@ -7,6 +7,15 @@ const api = {
   set: (key, value) => ipcRenderer.invoke('electron-store-set', key, value)
 }
 
+const updater = {
+  onUpdateAvailable: (cb) => ipcRenderer.on('update-available', (_event, info) => cb(info)),
+  onUpdateProgress: (cb) => ipcRenderer.on('update-progress', (_event, progress) => cb(progress)),
+  onUpdateDownloaded: (cb) => ipcRenderer.on('update-downloaded', (_event, info) => cb(info)),
+  onUpdateError: (cb) => ipcRenderer.on('update-error', (_event, err) => cb(err)),
+  startUpdate: () => ipcRenderer.invoke('start-update'),
+  restartAndInstall: () => ipcRenderer.invoke('restart-and-install')
+}
+
 // Use `contextBridge` APIs to expose Electron APIs to
 // renderer only if context isolation is enabled, otherwise
 // just add to the DOM global.
@@ -14,10 +23,12 @@ if (process.contextIsolated) {
   try {
     contextBridge.exposeInMainWorld('electron', electronAPI)
     contextBridge.exposeInMainWorld('api', api)
+    contextBridge.exposeInMainWorld('updater', updater)
   } catch (error) {
     console.error(error)
   }
 } else {
   window.electron = electronAPI
   window.api = api
+  window.updater = updater
 }

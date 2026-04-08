@@ -1,6 +1,6 @@
 {
-  "name": "DAT1-TAM-MAC-4.0.2",
-  "version": "4.0.2",
+  "name": "DAT1-TAM-MAC-4.0.3",
+  "version": "4.0.3",
   "description": "A Dat Desktop Application",
   "main": "out/main/index.js",
   "author": "DatOne",
@@ -31,6 +31,7 @@
     "adm-zip": "^0.5.16",
     "axios": "^1.7.7",
     "date-fns": "^3.6.0",
+    "electron-log": "^5.4.3",
     "electron-store": "^10.0.0",
     "electron-updater": "^6.3.4",
     "form-data": "^4.0.0",

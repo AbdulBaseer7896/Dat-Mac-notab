@@ -65,6 +65,11 @@ function App() {
   }, [])
 
   const logout = async () => {
+    try {
+      await window.electron.ipcRenderer.invoke('logout-activity')
+    } catch (e) {
+      console.error('Failed to log logout activity:', e)
+    }
     await window.api.set('user', null)
     setLoginUser(null)
   }

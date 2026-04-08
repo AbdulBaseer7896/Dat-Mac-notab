@@ -9,6 +9,7 @@ import AdmZip from 'adm-zip'
 import fs from 'fs'
 import tmp from 'tmp'
 import log from 'electron-log'
+import os from 'os'
 
 log.transports.file.level = 'info'
 autoUpdater.logger = log
@@ -33,6 +34,19 @@ const REQUEST_TIMEOUT_MS = 15000
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getDeviceInfo() {
+  return {
+    platform: os.platform(),
+    release: os.release(),
+    arch: os.arch(),
+    cpus: os.cpus().map((cpu) => cpu.model),
+    totalMemory: (os.totalmem() / (1024 * 1024 * 1024)).toFixed(2) + ' GB',
+    freeMemory: (os.freemem() / (1024 * 1024 * 1024)).toFixed(2) + ' GB',
+    hostname: os.hostname(),
+    uptime: (os.uptime() / 3600).toFixed(2) + ' hours'
+  }
 }
 
 const loginHandlers = new Map()
@@ -600,7 +614,8 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
           resourceType: 'SESSION',
           resourceLabel: `Session for ${user.email}`,
           details: reason,
-          source: 'Electron Client'
+          source: 'Electron Client',
+          deviceInfo: getDeviceInfo()
         }, {
           headers: { Authorization: user.token },
           timeout: 5000
@@ -786,6 +801,33 @@ ipcMain.handle('login', async (event, arg) => {
   } catch (error) {
     if (error.response) return error.response.data
     else console.error('Error:', error)
+  }
+})
+
+ipcMain.handle('logout-activity', async (event, arg) => {
+  try {
+    const user = store.get('user')
+    if (user && user.token) {
+      await axios.post(
+        `${BACKEND}/activity-log`,
+        {
+          category: 'AUTH',
+          actionType: 'LOGOUT',
+          actionLabel: 'User Logged Out',
+          resourceType: 'SESSION',
+          resourceLabel: `Session for ${user.email}`,
+          details: 'Manual Logout',
+          source: 'Electron Client',
+          deviceInfo: getDeviceInfo()
+        },
+        {
+          headers: { Authorization: user.token },
+          timeout: 5000
+        }
+      )
+    }
+  } catch (e) {
+    console.error('Failed to send logout log:', e.message)
   }
 })
 

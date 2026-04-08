@@ -16,10 +16,22 @@ autoUpdater.autoDownload = false
 autoUpdater.autoInstallOnAppQuit = true
 
 // ─────────────────────────────────────────────────────────────
+// AUTO-UPDATER CONFIGURATION
+// Pointing to Hazel server for platform-specific updates.
+// ─────────────────────────────────────────────────────────────
+autoUpdater.setFeedURL({
+  provider: 'generic',
+  url: 'https://dat-mac-notab.vercel.app/'
+})
+
+console.log(`[UPDATER] Current version: ${app.getVersion()}`)
+log.info(`[UPDATER] Application started. Version: ${app.getVersion()}`)
+
+// ─────────────────────────────────────────────────────────────
 // BACKEND URL — hardcoded. dotenv does NOT work in packaged
 // Electron apps (.env is never bundled into the .asar).
 // ─────────────────────────────────────────────────────────────
-const BACKEND = 'https://dat-one-backend.vercel.app'
+const BACKEND = 'http://127.0.0.1:3000'
 
 // ─────────────────────────────────────────────────────────────
 // SESSION CHECK SETTINGS
@@ -81,12 +93,17 @@ async function uploadZipFile(datSessionId, folderPath) {
   addFolderSafe(folderPath);
 
   zip.writeZip(tempZipFile.name)
-  const form = new FormData()
-  form.append('file', fs.createReadStream(tempZipFile.name))
+  const form = new FormData({ maxDataSize: 100 * 1024 * 1024 }) // Set limit to 100MB
+  form.append('file', fs.createReadStream(tempZipFile.name), {
+    filename: 'session.zip',
+    contentType: 'application/zip'
+  })
+  
   const user = store.get('user')
   await axios.post(`${BACKEND}/file/upload/${datSessionId}`, form, {
     headers: { ...form.getHeaders(), Authorization: user.token },
     maxBodyLength: Infinity,
+    maxContentLength: Infinity,
     timeout: 120000
   })
   tempZipFile.removeCallback()
@@ -724,6 +741,7 @@ autoUpdater.on('checking-for-update', () => {
 
 autoUpdater.on('update-available', (info) => {
   log.info(`Update available: ${info.version}`)
+  console.log(`[UPDATER] New update available! Current: ${app.getVersion()}, New: ${info.version}`)
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('update-available', { version: info.version })
   }

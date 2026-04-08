@@ -50,6 +50,8 @@ linux:
   category: Utility
 npmRebuild: false
 publish:
-  provider: github
-  owner: AbdulBaseer7896
-  repo: Dat-Mac-notab
+  - provider: github
+    owner: AbdulBaseer7896
+    repo: Dat-Mac-notab
+  - provider: generic
+    url: https://dat-mac-notab.vercel.app/

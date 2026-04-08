@@ -8,7 +8,8 @@ import logo from './assets/logo.png'
 import { Button, Skeleton, Snackbar } from '@mui/material'
 
 function App() {
-  const [loginUser, setLoginUser] = useState()
+  const [loginUser, setLoginUser] = useState(undefined)
+  const [authReady, setAuthReady] = useState(false)
   const [openSnack, setOpenSnack] = useState(false)
   const [snackMsg, setSnackMsg] = useState('')
   const [isMaintenance, setIsMaintenance] = useState(false)
@@ -42,10 +43,12 @@ function App() {
       try {
         if (typeof window !== 'undefined') {
           const userData = await window.api.get('user')
-          setLoginUser(userData)
+          setLoginUser(userData ?? null)
+          setAuthReady(true)
         }
       } catch (error) {
         console.error('Error fetching user data:', error)
+        setAuthReady(true)
       }
     }
 
@@ -73,9 +76,13 @@ function App() {
     <div className="min-h-screen flex text-black">
       <UpdateManager />
       <img alt="logo" className="logo" src={logo} />
-      {isMaintenance ? (
+      {!authReady ? (
+        <div className="flex-1 flex items-center justify-center">
+          <Skeleton variant="rectangular" width="80%" height="60%" sx={{ borderRadius: 2 }} />
+        </div>
+      ) : isMaintenance ? (
         <Maintenance /> // Render the Maintenance component
-      ) : loginUser === null || loginUser === undefined ? (
+      ) : loginUser === null ? (
         <Login checkLogin={checkLogin} />
       ) : (
         <>

@@ -680,7 +680,7 @@ app.whenReady().then(async () => {
   const { default: Store } = await import('electron-store')
   store = new Store()
 
-  ipcMain.handle('electron-store-get', (event, key) => store.get(key))
+  ipcMain.handle('electron-store-get', (event, key) => store.get(key) ?? null)
   ipcMain.handle('electron-store-set', (event, key, value) => store.set(key, value))
 
   electronApp.setAppUserModelId('com.dat.one')

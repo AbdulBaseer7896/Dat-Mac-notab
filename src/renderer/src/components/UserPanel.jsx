@@ -1,6 +1,6 @@
 import _ from 'lodash'
 import repair from '../assets/repair.png'
-import logo from '../assets/test-logo.webp'
+import logo from '../assets/test-image.jpg'
 import { useEffect, useState } from 'react'
 import MenuIcon from '@mui/icons-material/Menu'
 import SearchIcon from '@mui/icons-material/Search'

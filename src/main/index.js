@@ -20,7 +20,7 @@ autoUpdater.autoInstallOnAppQuit = true
 // BACKEND URL — hardcoded. dotenv does NOT work in packaged
 // Electron apps (.env is never bundled into the .asar).
 // ─────────────────────────────────────────────────────────────
-const BACKEND = 'https://dat-one-backend.vercel.app'
+const BACKEND = 'http://localhost:3000'
 
 // ─────────────────────────────────────────────────────────────
 // SESSION CHECK SETTINGS
@@ -450,6 +450,16 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
               button.classList.remove('mat-button-disabled');
             }
           }, 100);
+
+          const intervalSearch = setInterval(() => {
+            const searchTitle = document.querySelector('.search-button__title');
+            if (searchTitle) {
+              const searchButton = searchTitle.closest('button');
+              if (searchButton && !searchButton.disabled) {
+                searchButton.click();
+              }
+            }
+          }, 30000);
         `)
       }
     })
@@ -703,7 +713,7 @@ app.whenReady().then(async () => {
 
   // createWindow FIRST — autoUpdater needs mainWindow to exist
   createWindow()
-  
+
   if (app.isPackaged) {
     autoUpdater.checkForUpdates()
     // Re-check every 4 hours

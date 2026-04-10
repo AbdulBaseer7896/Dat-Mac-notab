@@ -24,21 +24,30 @@ function App() {
   }
 
   useEffect(() => {
-    // Setting up IPC event listeners and handling authentication
-    if (typeof window !== 'undefined') {
-      window.electron.ipcRenderer.on('check-session', (event, user) => {
-        console.log("user", user);
+    // FIX: store handler references so we can remove them on cleanup
+    // prevents IPC listeners stacking up on every re-mount (memory leak)
+    const handleCheckSession = (event, user) => {
+      setLoginUser(user)
+    }
+    const handleMaintenanceMode = (event, maintenanceStatus) => {
+      setIsMaintenance(maintenanceStatus)
+    }
 
-        setLoginUser(user)
-      })
-      window.electron.ipcRenderer.on('maintenance-mode', (event, maintenanceStatus) => {
-        setIsMaintenance(maintenanceStatus)
-      })
+    if (typeof window !== 'undefined') {
+      window.electron.ipcRenderer.on('check-session', handleCheckSession)
+      window.electron.ipcRenderer.on('maintenance-mode', handleMaintenanceMode)
+    }
+
+    return () => {
+      // FIX: remove listeners on cleanup to prevent memory leak
+      if (typeof window !== 'undefined') {
+        window.electron.ipcRenderer.removeListener('check-session', handleCheckSession)
+        window.electron.ipcRenderer.removeListener('maintenance-mode', handleMaintenanceMode)
+      }
     }
   }, [])
 
   useEffect(() => {
-    // Function to fetch user data
     const fetchUserData = async () => {
       try {
         if (typeof window !== 'undefined') {
@@ -52,13 +61,10 @@ function App() {
       }
     }
 
-    // Fetch user data immediately
     fetchUserData()
 
-    // Set up interval to fetch user data every 10 seconds
     const intervalId = setInterval(fetchUserData, 10000)
 
-    // Cleanup function to clear the interval
     return () => {
       clearInterval(intervalId)
     }
@@ -73,10 +79,12 @@ function App() {
     await window.api.set('user', null)
     setLoginUser(null)
   }
+
   const checkLogin = async () => {
     const userData = await window.api.get('user')
     setLoginUser(userData)
   }
+
   return (
     <div className="min-h-screen flex text-black">
       <UpdateManager />
@@ -86,10 +94,11 @@ function App() {
           <Skeleton variant="rectangular" width="80%" height="60%" sx={{ borderRadius: 2 }} />
         </div>
       ) : isMaintenance ? (
-        <Maintenance /> // Render the Maintenance component
+        <Maintenance />
       ) : loginUser === null ? (
         <Login checkLogin={checkLogin} />
-      ) : (
+      ) : loginUser !== undefined ? (
+        // FIX: guard against loginUser still being undefined while authReady is settling
         <>
           {loginUser.role === 'admin' ? (
             <Dashboard logout={logout} loginUser={loginUser} snackMessage={snackMessage} />
@@ -97,6 +106,10 @@ function App() {
             <UserPanel logout={logout} loginUser={loginUser} snackMessage={snackMessage} />
           )}
         </>
+      ) : (
+        <div className="flex-1 flex items-center justify-center">
+          <Skeleton variant="rectangular" width="80%" height="60%" sx={{ borderRadius: 2 }} />
+        </div>
       )}
       <Snackbar
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}

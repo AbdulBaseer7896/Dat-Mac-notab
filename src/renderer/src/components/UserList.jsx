@@ -34,7 +34,7 @@ const isRecentlyUpdated = (lastUpdated) => {
     // Formatting the last online time
     const formattedLastOnline = new Date(lastUpdated).toLocaleString()
     const tooltipText = `Last Online: ${formattedLastOnline}`
-    if (isOnline == 'Online') {
+    if (isOnline === true) {
       return (
         <Chip
           label={statusText}
@@ -124,7 +124,8 @@ const datAccountType = (domain) => {
   )
 }
 
-export default function UserList() {
+// eslint-disable-next-line react/prop-types
+export default function UserList({ snackMessage }) {
   const [open, setOpen] = React.useState(false)
   const [users, setUsers] = React.useState([])
   const [datSessions, setDatSessions] = React.useState([])
@@ -277,6 +278,7 @@ export default function UserList() {
             selectedUser={selectedUser}
             fetchUserData={fetchUserData}
             setSelectedUser={setSelectedUser}
+            snackMessage={snackMessage}
           />
         </div>
         <TableContainer>

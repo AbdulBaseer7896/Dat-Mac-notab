@@ -98,8 +98,7 @@ export default function CreateUpdateDomain({
   }
 
   const initialValues = {
-    name: '',
-    proxy: ''
+    domain: ''
   }
 
   return (

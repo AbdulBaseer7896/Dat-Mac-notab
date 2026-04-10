@@ -20,13 +20,11 @@ autoUpdater.autoInstallOnAppQuit = true
 // BACKEND URL — hardcoded. dotenv does NOT work in packaged
 // Electron apps (.env is never bundled into the .asar).
 // ─────────────────────────────────────────────────────────────
-const BACKEND = 'http://139.59.86.143:3000'
+// const BACKEND = 'http://139.59.86.143:3000'
+const BACKEND = 'http://127.0.0.1:3000'
 
 // ─────────────────────────────────────────────────────────────
 // SESSION CHECK SETTINGS
-// 3 consecutive failures needed before logout (not just 1)
-// so a single network blip never kicks a user out.
-// 60s interval = 8 req/min for 8 users instead of 16 req/min.
 // ─────────────────────────────────────────────────────────────
 const FAILURES_BEFORE_LOGOUT = 3
 const SESSION_CHECK_INTERVAL_MS = 60000
@@ -53,48 +51,46 @@ const loginHandlers = new Map()
 
 app.on('login', (event, webContents, request, authInfo, callback) => {
   const { host } = authInfo
-  // console.log(`[AUTH] Proxy login request for host: ${host}`)
   if (loginHandlers.has(host)) {
     const { username, password } = loginHandlers.get(host)
-    // console.log(`[AUTH] Providing credentials for ${host}`)
     callback(username, password)
-    // CRITICAL: We do NOT delete the handler here. 
-    // Proxies often require authentication multiple times as different resources load.
     event.preventDefault()
   } else {
-    // console.log(`[AUTH] No credentials found for ${host}`)
     event.preventDefault()
   }
 })
 
 async function uploadZipFile(datSessionId, folderPath) {
+  // FIX: guard against store not being initialized
+  if (!store) throw new Error('Store not initialized')
+
   const tempZipFile = tmp.fileSync({ postfix: '.zip' })
   const zip = new AdmZip()
 
   function addFolderSafe(currentPath, zipPath = '') {
-    if (!fs.existsSync(currentPath)) return;
+    if (!fs.existsSync(currentPath)) return
     try {
-      const items = fs.readdirSync(currentPath);
+      const items = fs.readdirSync(currentPath)
       for (const item of items) {
-        const fullPath = path.join(currentPath, item);
+        const fullPath = path.join(currentPath, item)
         try {
           if (fs.statSync(fullPath).isDirectory()) {
-            addFolderSafe(fullPath, zipPath ? `${zipPath}/${item}` : item);
+            addFolderSafe(fullPath, zipPath ? `${zipPath}/${item}` : item)
           } else {
-            zip.addLocalFile(fullPath, zipPath);
+            zip.addLocalFile(fullPath, zipPath)
           }
         } catch (err) {
-          console.log(`Skipping locked file/folder: ${fullPath}`);
+          console.log(`Skipping locked file/folder: ${fullPath}`)
         }
       }
     } catch (err) {
-      console.log(`Skipping folder: ${currentPath} - ${err.message}`);
+      console.log(`Skipping folder: ${currentPath} - ${err.message}`)
     }
   }
 
-  addFolderSafe(folderPath);
-
+  addFolderSafe(folderPath)
   zip.writeZip(tempZipFile.name)
+
   const form = new FormData()
   form.append('file', fs.createReadStream(tempZipFile.name))
   const user = store.get('user')
@@ -108,6 +104,18 @@ async function uploadZipFile(datSessionId, folderPath) {
 }
 
 async function downloadAndUnzipFile(fileName, destinationPath) {
+  // FIX: guard against store not being initialized
+  if (!store) throw new Error('Store not initialized')
+
+  // FIX: if the userWindow is already open, the Chromium partition folder is locked
+  // by the running process — extracting into it will throw UNKNOWN errors on locked files
+  // (Cache, LevelDB, Session Storage). Skip the download entirely in this case;
+  // the session data is already loaded in the running window.
+  if (userWindow && !userWindow.isDestroyed()) {
+    console.log('[DOWNLOAD] Skipping extraction — userWindow is open and partition is in use.')
+    return
+  }
+
   try {
     const user = store.get('user')
     const response = await axios.request({
@@ -118,7 +126,6 @@ async function downloadAndUnzipFile(fileName, destinationPath) {
       maxBodyLength: Infinity,
       timeout: 120000,
       onDownloadProgress: (progressEvent) => {
-        // Guard mainWindow — it can be null during startup
         if (mainWindow && !mainWindow.isDestroyed()) {
           const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total)
           mainWindow.webContents.send('on-downloading-file', percentCompleted)
@@ -131,8 +138,31 @@ async function downloadAndUnzipFile(fileName, destinationPath) {
     if (!fs.existsSync(destinationPath)) {
       fs.mkdirSync(destinationPath, { recursive: true })
     }
+
+    // FIX: extract file-by-file instead of extractAllTo() so that any individual
+    // locked file (Cache, LevelDB LOCK, Session Storage) is skipped gracefully
+    // rather than crashing the entire extraction with UNKNOWN error
     const zip = new AdmZip(tempZipFile.name)
-    zip.extractAllTo(destinationPath, true)
+    const entries = zip.getEntries()
+    let skipped = 0
+    let extracted = 0
+    for (const entry of entries) {
+      if (entry.isDirectory) continue
+      const entryDest = path.join(destinationPath, entry.entryName)
+      const entryDir = path.dirname(entryDest)
+      try {
+        if (!fs.existsSync(entryDir)) {
+          fs.mkdirSync(entryDir, { recursive: true })
+        }
+        fs.writeFileSync(entryDest, entry.getData())
+        extracted++
+      } catch (entryErr) {
+        console.log(`[EXTRACT] Skipping locked/busy file: ${entry.entryName} (${entryErr.code})`)
+        skipped++
+      }
+    }
+    console.log(`[EXTRACT] Done — ${extracted} files extracted, ${skipped} skipped (locked).`)
+
     tempZipFile.removeCallback()
     console.log('Temporary zip file deleted.')
     store.set('currentFileName', fileName)
@@ -141,18 +171,13 @@ async function downloadAndUnzipFile(fileName, destinationPath) {
   }
 }
 
-let newWindows = []   // track popup windows opened from userWindow
+let newWindows = []
 let mainWindow
 let proxyWindow
 let userWindow
 let intervalId
 let store
 
-// ─────────────────────────────────────────────────────────────
-// Only compare meaningful fields — NOT isOnline/timestamps.
-// isOnline changes on every check-session call and must never
-// trigger a logout.
-// ─────────────────────────────────────────────────────────────
 function userDataChanged(stored, fresh) {
   if (!stored || !fresh) return true
   const relevantKeys = ['id', 'role', 'isBanned', 'token']
@@ -184,7 +209,6 @@ function userDataChanged(stored, fresh) {
 // PROXY WINDOW (admin session upload)
 // ─────────────────────────────────────────────────────────────
 async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
-  // Sanitize proxy string: remove http:// or https:// if user pasted them
   let proxyStr = (proxyUrl || '').trim()
   proxyStr = proxyStr.replace(/^https?:\/\//, '')
 
@@ -205,7 +229,6 @@ async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
 
   if (host) {
     loginHandlers.set(host, { username, password })
-    // If the host is an IP, also set it without port just in case authInfo omits it
     if (host.includes(':')) loginHandlers.set(host.split(':')[0], { username, password })
   }
 
@@ -225,9 +248,6 @@ async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
     }
   })
 
-  // proxyWindow.webContents.setUserAgent(
-  //   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
-  // )
   proxyWindow.webContents.setUserAgent(
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   )
@@ -235,12 +255,18 @@ async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
   proxyWindow.on('ready-to-show', () => proxyWindow.show())
 
   proxyWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    // FIX: suppress error -3 (ERR_ABORTED) on Auth0 silent-auth URLs — these are
+    // expected failures when Auth0 tries response_mode=web_message iframe auth.
+    // They do NOT mean the session is broken — the page will recover on its own.
+    if (errorCode === -3 && validatedURL && validatedURL.includes('login.dat.com/authorize')) {
+      console.log(`[PROXY LOAD] Suppressed Auth0 silent-auth abort on ${validatedURL} — expected behaviour`)
+      return
+    }
     console.error(`[LOAD ERROR] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`)
   })
 
   proxyWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
-  // Try loading a simple page first if DAT is blank, or just stick to DAT
   console.log(`[NAVIGATE] Loading URL: https://one.dat.com`)
   proxyWindow.loadURL('https://one.dat.com')
 
@@ -279,15 +305,10 @@ async function createProxyWindow({ proxyUrl, partitionName, datSessionId }) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// USER WINDOW — NO TABS VERSION
-// Uses loadURL(domain) directly, exactly like the old code.
-// No tabShell.html, no webview, no + button.
-// Popup windows (window.open) still open in a new BrowserWindow
-// using setWindowOpenHandler, same as the old reference code.
+// USER WINDOW
 // ─────────────────────────────────────────────────────────────
 async function createUserWindow({ proxyUrl, partitionName, permissions, fileName, datSessionId, domain }) {
 
-  // Download session data if needed
   const currentFileName = store.get('currentFileName')
   if (currentFileName !== fileName && datSessionId && fileName) {
     const userDataPath = app.getPath('userData')
@@ -314,14 +335,11 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
 
   if (host) {
     loginHandlers.set(host, { username, password })
-    // If the host is an IP, also set it without port just in case authInfo omits it
     if (host.includes(':')) loginHandlers.set(host.split(':')[0], { username, password })
   }
 
   const { width, height } = screen.getPrimaryDisplay().workAreaSize
 
-  // Standard BrowserWindow — no nodeIntegration needed since we
-  // are not loading a local HTML file that uses require('electron')
   userWindow = new BrowserWindow({
     width, height,
     show: true,
@@ -334,12 +352,10 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       preload: join(__dirname, '../preload/index.js'),
       partition: partitionName,
       sandbox: false,
-      // Explicitly allow WebAuthn (Passkeys) for modern site compatibility
       webauthn: true
     }
   })
 
-  // Block DevTools
   userWindow.webContents.on('devtools-opened', () => userWindow.webContents.closeDevTools())
   userWindow.webContents.on('before-input-event', (event, input) => {
     if (
@@ -350,12 +366,20 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
   })
 
   userWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    // FIX: suppress error -3 (ERR_ABORTED) on Auth0 silent-auth URLs — these are
+    // expected failures when Auth0 uses response_mode=web_message iframe silent auth.
+    // The browser aborts the navigation intentionally after receiving the postMessage.
+    // Triggering maintenance mode here would incorrectly kick the user out.
+    if (errorCode === -3 && validatedURL && validatedURL.includes('login.dat.com/authorize')) {
+      console.log(`[USER LOAD] Suppressed Auth0 silent-auth abort — expected behaviour`)
+      return
+    }
     console.log(`[USER LOAD ERROR] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`)
     if (errorDescription.includes('ERR_PROXY_CONNECTION_FAILED')) {
       console.log('Proxy connection failed!')
     }
     if (errorCode === -10 || errorDescription.includes('ERR_TOO_MANY_RETRIES')) {
-      console.log('Infinite redirect loop detected! This usually means your DAT session is expired or the proxy is blocking the authentication.')
+      console.log('Infinite redirect loop detected! DAT session may be expired or proxy is blocking authentication.')
     }
   })
 
@@ -368,7 +392,6 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
   })
 
-  // Load the DAT domain directly — no tab shell
   userWindow.loadURL(domain)
 
   // ── BUILD CSS from permissions ──
@@ -418,7 +441,6 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       .directory { pointer-events: none !important; opacity: 0.5 !important; cursor: not-allowed !important; display: none !important; }
       mat-icon[data-mat-icon-name="chevron-up"][data-mat-icon-namespace="app"] { display: none !important; }
     `
-  // Multitab limits — same logic as old code
   if (permissions.searchLoadsMultitab) {
     css += `
       .mat-tab-labels > div:nth-child(${permissions.searchLoadsNoMultitab + 1}) .add-button { display: none !important; }
@@ -441,7 +463,6 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
     userWindow.webContents.on('did-finish-load', () => {
       if (userWindow && !userWindow.isDestroyed()) {
         userWindow.webContents.insertCSS(css)
-        // Re-enable the add-button inside DAT's own tab bar
         userWindow.webContents.executeJavaScript(`
           const interval = setInterval(() => {
             const button = document.querySelector('.add-button');
@@ -465,9 +486,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
     })
   }
 
-  // ── POPUP WINDOWS (window.open from DAT) ──
-  // Exactly like the old reference code — opens a new BrowserWindow
-  // with the same partition and CSS injected.
+  // ── POPUP WINDOWS ──
   userWindow.webContents.setWindowOpenHandler((details) => {
     const { width, height } = screen.getPrimaryDisplay().workAreaSize
 
@@ -485,8 +504,9 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       }
     })
 
+    // FIX: popup windows now use same Chrome/122 user agent as main windows (was 115)
     newWindow.webContents.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     )
     newWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
     newWindow.webContents.on('devtools-opened', () => newWindow.webContents.closeDevTools())
@@ -498,7 +518,6 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       ) event.preventDefault()
     })
 
-    // CSS for popup windows — hide sidebar and header like old code
     const popupCSS = `
       .mat-drawer-side { display: none !important; }
       .mat-drawer-content { margin-left: 0px !important; }
@@ -544,12 +563,16 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
   })
 
   // ── DAT SESSION LOGOUT DETECTION ──
-  // If DAT redirects to login.dat.com, the session has expired on DAT's side.
-  // Show maintenance mode and close the window.
   userWindow.webContents.on('will-navigate', async (event, navigationUrl) => {
     try {
       const parsedUrl = new URL(navigationUrl)
       if (datSessionId && parsedUrl.hostname === 'login.dat.com') {
+        // FIX: only block navigation and trigger maintenance if it's a full page redirect,
+        // NOT the Auth0 silent-auth authorize endpoint (which uses web_message mode, not navigation)
+        if (parsedUrl.pathname === '/authorize') {
+          // Silent auth — let it proceed, do not trigger maintenance
+          return
+        }
         event.preventDefault()
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('maintenance-mode', true)
@@ -572,8 +595,6 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
   })
 
   // ── SESSION VALIDITY CHECK every 60s ──
-  // Uses failure counter so one network blip never logs the user out.
-  // Random jitter spreads requests from all 8 computers across time.
   let consecutiveFailures = 0
   const jitter = Math.floor(Math.random() * 15000)
   await delay(jitter)
@@ -590,7 +611,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
         timeout: REQUEST_TIMEOUT_MS
       })
 
-      consecutiveFailures = 0  // reset on success
+      consecutiveFailures = 0
 
       if (userDataChanged(user, response.data)) {
         console.log('User data changed — logging out.')
@@ -608,7 +629,6 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
         console.log(`${FAILURES_BEFORE_LOGOUT} consecutive failures — logging out.`)
         forceLogout(`Network connectivity issues (${FAILURES_BEFORE_LOGOUT} consecutive failures)`)
       }
-      // else: transient error, stay logged in and retry next interval
     }
   }, SESSION_CHECK_INTERVAL_MS)
 
@@ -639,12 +659,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('check-session', null)
   }
 
-  // ── WINDOW CLOSE cleanup ──
-  // Do NOT clear user store here — only forceLogout() above does that.
-  // Closing the window normally returns the user to the login screen
-  // still authenticated so they can reopen the session.
   userWindow.on('closed', async () => {
-    // Close any popup windows that were opened from this session
     newWindows.forEach((win) => {
       try { if (!win.isDestroyed()) win.close() } catch (e) { }
     })
@@ -694,11 +709,6 @@ function createWindow() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// AUTO UPDATER INITIALIZATION
-// ─────────────────────────────────────────────────────────────
-// Feed URL is now handled by electron-builder.yml (github provider)
-
-// ─────────────────────────────────────────────────────────────
 // APP READY
 // ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
@@ -711,12 +721,10 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.dat.one')
   app.on('browser-window-created', (_, window) => optimizer.watchWindowShortcuts(window))
 
-  // createWindow FIRST — autoUpdater needs mainWindow to exist
   createWindow()
 
   if (app.isPackaged) {
     autoUpdater.checkForUpdates()
-    // Re-check every 4 hours
     setInterval(() => {
       autoUpdater.checkForUpdates()
     }, 4 * 60 * 60 * 1000)

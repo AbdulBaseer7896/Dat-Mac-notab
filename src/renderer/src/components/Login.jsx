@@ -53,12 +53,12 @@ export default function Login({ checkLogin }) {
 
   const handleSubmit = async (values, { setSubmitting, setErrors }) => {
     setSubmitting(true)
+    // FIX: never store password in localStorage (security risk)
+    // Only remember the email for convenience
     if (values.rememberMe) {
       localStorage.setItem('email', values.email)
-      localStorage.setItem('password', values.password)
     } else {
       localStorage.removeItem('email')
-      localStorage.removeItem('password')
     }
     const response = await window.electron.ipcRenderer.invoke('login', values)
     if (response.message) snackMessage(response.message)
@@ -80,7 +80,7 @@ export default function Login({ checkLogin }) {
         <Formik
           initialValues={{
             email: localStorage.getItem('email') ? localStorage.getItem('email') : '',
-            password: localStorage.getItem('password') ? localStorage.getItem('password') : '',
+            password: '',
             rememberMe: true,
             message: ''
           }}

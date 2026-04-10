@@ -20,7 +20,7 @@ autoUpdater.autoInstallOnAppQuit = true
 // BACKEND URL — hardcoded. dotenv does NOT work in packaged
 // Electron apps (.env is never bundled into the .asar).
 // ─────────────────────────────────────────────────────────────
-const BACKEND = 'http://139.59.86.143:3000'
+const BACKEND = 'http://127.0.0.1:3000'
 // const BACKEND = 'http://127.0.0.1:3000'
 
 // ─────────────────────────────────────────────────────────────
@@ -480,7 +480,7 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
                 searchButton.click();
               }
             }
-          }, 30000);
+          }, 5000);
         `)
       }
     })

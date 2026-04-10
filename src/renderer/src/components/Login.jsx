@@ -1,6 +1,6 @@
 import * as React from 'react'
 import * as Yup from 'yup'
-import logo from '../assets/test-image.jpg'
+import logo from '../assets/tech-logo-exp.png'
 import { Formik } from 'formik'
 import LoadingButton from '@mui/lab/LoadingButton'
 import IconButton from '@mui/material/IconButton'

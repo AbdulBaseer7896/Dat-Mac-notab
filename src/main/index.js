@@ -460,32 +460,34 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
         userWindow.webContents.insertCSS(css)
       }
     })
-    userWindow.webContents.on('did-finish-load', () => {
-      if (userWindow && !userWindow.isDestroyed()) {
-        userWindow.webContents.insertCSS(css)
-        userWindow.webContents.executeJavaScript(`
-      const interval = setInterval(() => {
-        const button = document.querySelector('.add-button');
-        if (button) {
-          button.removeAttribute('disabled');
-          button.classList.remove('mat-button-disabled');
-        }
-      }, 100);
 
-      /* // Commented out the 5-second auto-clicker
-      const intervalSearch = setInterval(() => {
-        const searchTitle = document.querySelector('.search-button__title');
-        if (searchTitle) {
-          const searchButton = searchTitle.closest('button');
-          if (searchButton && !searchButton.disabled) {
-            searchButton.click();
-          }
-        }
-      }, 5000); 
-      */
-    `)
+    userWindow.webContents.on("did-finish-load", () => {
+      if (!userWindow || userWindow.isDestroyed()) return;
+
+      userWindow.webContents.insertCSS(css);
+
+      userWindow.webContents.executeJavaScript(`
+    const interval = setInterval(() => {
+      const button = document.querySelector('.add-button');
+      if (button) {
+        button.removeAttribute('disabled');
+        button.classList.remove('mat-button-disabled');
+        clearInterval(interval);
       }
-    })
+    }, 100);
+
+    const intervalSearch = setInterval(() => {
+      const searchTitle = document.querySelector('.search-button__title');
+      if (searchTitle) {
+        const searchButton = searchTitle.closest('button');
+        if (searchButton && !searchButton.disabled) {
+          searchButton.click();
+          clearInterval(intervalSearch);
+        }
+      }
+    }, 4000);
+  `).catch(err => console.error("executeJavaScript failed:", err));
+    });
   }
 
   // ── POPUP WINDOWS ──

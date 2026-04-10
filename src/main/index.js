@@ -464,24 +464,26 @@ async function createUserWindow({ proxyUrl, partitionName, permissions, fileName
       if (userWindow && !userWindow.isDestroyed()) {
         userWindow.webContents.insertCSS(css)
         userWindow.webContents.executeJavaScript(`
-          const interval = setInterval(() => {
-            const button = document.querySelector('.add-button');
-            if (button) {
-              button.removeAttribute('disabled');
-              button.classList.remove('mat-button-disabled');
-            }
-          }, 100);
+      const interval = setInterval(() => {
+        const button = document.querySelector('.add-button');
+        if (button) {
+          button.removeAttribute('disabled');
+          button.classList.remove('mat-button-disabled');
+        }
+      }, 100);
 
-          const intervalSearch = setInterval(() => {
-            const searchTitle = document.querySelector('.search-button__title');
-            if (searchTitle) {
-              const searchButton = searchTitle.closest('button');
-              if (searchButton && !searchButton.disabled) {
-                searchButton.click();
-              }
-            }
-          }, 5000);
-        `)
+      /* // Commented out the 5-second auto-clicker
+      const intervalSearch = setInterval(() => {
+        const searchTitle = document.querySelector('.search-button__title');
+        if (searchTitle) {
+          const searchButton = searchTitle.closest('button');
+          if (searchButton && !searchButton.disabled) {
+            searchButton.click();
+          }
+        }
+      }, 5000); 
+      */
+    `)
       }
     })
   }
